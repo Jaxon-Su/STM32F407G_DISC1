@@ -1,0 +1,23 @@
+# Build output
+Debug/
+Release/
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.o
+*.d
+*.su
+*.cyclo
+
+# Local IDE metadata
+.metadata/
+*.launch
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+*.swp
+*.tmp
+

@@ -1,0 +1,224 @@
+STM32 HAL SPI2 TX Testing 筆記
+=============================
+
+目前專案目標：
+用 HAL/CubeMX 搬移課程中的 SPI2 transmit demo。
+
+原始 demo 目標：
+- 設定 PB13 為 SPI2_SCK
+- 設定 PB15 為 SPI2_MOSI
+- 設定 SPI2 為 master
+- 透過 MOSI 送出 "Hello world"
+- 用示波器或邏輯分析儀確認 SCK/MOSI 波形
+
+
+檔案角色
+--------
+
+1. main.c
+
+main.c 是整個程式的入口。
+
+它主要負責：
+- HAL_Init()
+- SystemClock_Config()
+- MX_GPIO_Init()
+- MX_SPI2_Init()
+- 呼叫 Example002_SpiTxTesting_Init()
+- 在 while(1) 裡呼叫 Example002_SpiTxTesting_Loop()
+
+main.c 不直接手寫 SPI 暫存器設定。
+SPI2 的 pin alternate function、clock、mode、baud rate 等設定由 CubeMX 產生。
+
+
+2. example_002_spi_tx_testing.h
+
+example_002_spi_tx_testing.h 是宣告檔。
+
+它主要負責宣告：
+- Example002_SpiTxTesting_Init()
+- Example002_SpiTxTesting_Loop()
+
+main.c include 這個 header 後，就能呼叫 002 example 的 Init/Loop。
+
+
+3. example_002_spi_tx_testing.c
+
+example_002_spi_tx_testing.c 是第 002 個案例的實作。
+
+它主要負責：
+- 使用 CubeMX 產生的 hspi2 handle
+- 呼叫 HAL_SPI_Transmit() 送出 "Hello world"
+- 傳送成功後 toggle LD4
+- 每 1000 ms 傳送一次
+
+主要函式：
+
+Example002_SpiTxTesting_Init()
+  -> 設定 LD4 初始狀態為 RESET
+
+Example002_SpiTxTesting_Loop()
+  -> HAL_SPI_Transmit(&hspi2, ...)
+  -> 如果回傳 HAL_OK，就 toggle LD4
+  -> HAL_Delay(1000)
+
+
+程式啟動流程
+------------
+
+main()
+  |
+  v
+HAL_Init()
+  |
+  v
+SystemClock_Config()
+  |
+  v
+MX_GPIO_Init()
+  |
+  v
+MX_SPI2_Init()
+  |
+  v
+Example002_SpiTxTesting_Init()
+  |
+  v
+while(1)
+  |
+  v
+Example002_SpiTxTesting_Loop()
+  |
+  v
+HAL_SPI_Transmit()
+  |
+  v
+如果 HAL_OK，toggle LD4
+  |
+  v
+HAL_Delay(1000)
+
+
+SPI2 腳位設定
+-------------
+
+CubeMX 產生的 HAL_SPI_MspInit() 會設定：
+
+PB13 = SPI2_SCK
+PB14 = SPI2_MISO
+PB15 = SPI2_MOSI
+
+這些 pin 會被設為：
+- Alternate Function mode
+- Push-pull
+- No pull-up / no pull-down
+- AF5 SPI2
+
+原始 demo 只需要 SCK + MOSI 驗證 transmit，但目前 CubeMX 使用 SPI2 full-duplex master，
+所以 PB14/MISO 也會一起被設定。
+
+
+SPI2 參數設定
+-------------
+
+目前 SPI2 主要設定：
+
+- Mode: Master
+- Direction: 2-line full duplex
+- Data size: 8-bit
+- First bit: MSB first
+- CPOL: High
+- CPHA: 1 Edge
+- NSS: Software
+- Prescaler: 2
+
+CPOL / CPHA 對應：
+
+CPOL = High
+  -> SCK idle 狀態為 High
+
+CPHA = 1 Edge
+  -> 在第一個 clock edge 取樣
+
+因為 CPOL = High，第一個 edge 是 falling edge。
+所以目前設定等價於：
+
+SPI Mode 2
+  -> CPOL = 1
+  -> CPHA = 0
+  -> SCK idle high
+  -> sample on falling edge
+
+MSB first 代表每個 byte 先送 bit7，再送 bit6，一直到 bit0。
+
+
+原始 driver demo 與 HAL 對應
+----------------------------
+
+SPI2_GPIOInits()
+  -> CubeMX 產生 HAL_SPI_MspInit()
+  -> 設定 PB13/PB14/PB15 為 AF5 SPI2
+
+SPI2_Inits()
+  -> CubeMX 產生 MX_SPI2_Init()
+  -> 設定 master、full duplex、8-bit、CPOL/CPHA、software NSS
+
+SPI_SSIConfig()
+  -> CubeMX/HAL 透過 SPI_NSS_SOFT 設定 software NSS
+
+SPI_PeripheralControl()
+  -> HAL_SPI_Transmit() 內部處理 SPI 使用流程
+
+SPI_SendData()
+  -> HAL_SPI_Transmit()
+
+SPI_GetFlagStatus(SPI_BUSY_FLAG)
+  -> HAL_SPI_Transmit() 內部等待傳輸完成或 timeout
+
+
+HAL_SPI_Transmit() 做什麼
+-------------------------
+
+目前程式使用：
+
+HAL_SPI_Transmit(&hspi2,
+                 (uint8_t *)kUserData,
+                 strlen((const char *)kUserData),
+                 HAL_MAX_DELAY)
+
+意思是：
+- 使用 SPI2 handle
+- 傳送 kUserData 內的 bytes
+- 傳送長度由 strlen("Hello world") 決定
+- 等待直到傳送完成
+
+如果回傳 HAL_OK：
+- 表示 HAL 認為傳輸完成
+- 程式會 toggle LD4 作為成功指示
+
+
+觀察方式
+--------
+
+使用邏輯分析儀或示波器接：
+
+PB13 = SPI2_SCK
+PB15 = SPI2_MOSI
+GND  = GND
+
+每秒會送出一次：
+
+Hello world
+
+邏輯分析儀 SPI decoder 建議設定：
+- SPI Mode 2
+- CPOL = 1
+- CPHA = 0
+- MSB first
+- 8-bit data
+
+如果 analyzer 的 CPOL/CPHA 或 bit order 設錯，波形仍然會存在，
+但解碼出的文字可能不是 "Hello world"。
+
+LD4 會在 HAL_SPI_Transmit() 回傳 HAL_OK 時 toggle。
+

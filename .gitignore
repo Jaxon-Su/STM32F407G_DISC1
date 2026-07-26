@@ -1,0 +1,27 @@
+# Build output
+**/Debug/
+**/Release/
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.o
+*.d
+*.su
+*.cyclo
+
+# CubeIDE workspace metadata
+.metadata/
+*.launch
+
+# Old nested git backup, if present
+.git_001_backup/
+**/.git_001_backup/
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+*.swp
+*.tmp
+

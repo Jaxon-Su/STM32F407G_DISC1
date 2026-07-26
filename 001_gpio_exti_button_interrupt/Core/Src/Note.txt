@@ -1,0 +1,222 @@
+STM32 HAL Example 呼叫關係筆記
+================================
+
+目前專案目標：
+用 HAL/CubeMX 練習「PA0 板上按鈕中斷 + PD12 LED Toggle」。
+
+目前額外觀察：
+- PD13、PD14、PD15 在 main loop 內每 500 ms toggle 一次。
+- PA0 按鈕中斷發生時，PD12 會立即 toggle。
+- 這可以用來觀察 main loop 工作與 interrupt callback 工作的差異。
+
+
+檔案角色
+--------
+
+1. main.c
+
+main.c 是整個程式的入口。
+
+它主要負責：
+- HAL_Init()
+- SystemClock_Config()
+- MX_GPIO_Init()
+- MX_I2C1_Init()
+- MX_I2S3_Init()
+- MX_SPI1_Init()
+- MX_USB_OTG_FS_HCD_Init()
+- 呼叫 Examples_Init()
+- 在 while(1) 裡呼叫 Examples_Loop()
+- 接收 HAL callback，轉交給 examples layer
+
+main.c 不直接寫每個範例的主要邏輯。
+main.c 只負責初始化與轉接。
+
+
+2. examples.h
+
+examples.h 是宣告檔。
+
+它主要負責：
+- 宣告 Examples_Init()
+- 宣告 Examples_Loop()
+- 宣告 Examples_EXTI_Callback()
+- 宣告 Example001_ButtonInterrupt_Init()
+- 宣告 Example001_ButtonInterrupt_Loop()
+- 宣告 Example001_ButtonInterrupt_EXTI_Callback()
+
+其他 .c 檔只要 include "examples.h"，就知道可以呼叫哪些函式。
+
+
+3. examples.c
+
+examples.c 是範例選擇器。
+
+它主要負責：
+根據 ACTIVE_EXAMPLE 決定目前要執行哪一個 example。
+
+例如現在：
+
+#define ACTIVE_EXAMPLE EXAMPLE_001_BUTTON_INTERRUPT
+
+所以：
+
+Examples_Init()
+  -> 呼叫 Example001_ButtonInterrupt_Init()
+
+Examples_Loop()
+  -> 呼叫 Example001_ButtonInterrupt_Loop()
+
+Examples_EXTI_Callback(GPIO_Pin)
+  -> 呼叫 Example001_ButtonInterrupt_EXTI_Callback(GPIO_Pin)
+
+
+4. example_001_button_interrupt.c
+
+example_001_button_interrupt.c 是第 001 個案例的實作。
+
+它主要負責：
+- 初始化 PD12、PD13、PD14、PD15 LED 狀態
+- 在 main loop 中每 500 ms toggle PD13、PD14、PD15
+- 處理 PA0 板上按鈕中斷
+- 在 PA0 rising edge 發生時 toggle PD12 LED
+
+主要函式：
+
+Example001_ButtonInterrupt_Init()
+  -> 設定 LED 初始狀態，例如 PD12/PD13/PD14/PD15 = RESET
+
+Example001_ButtonInterrupt_Loop()
+  -> HAL_Delay(500)
+  -> Toggle LED_PD13、LED_PD14、LED_PD15
+
+Example001_ButtonInterrupt_EXTI_Callback(GPIO_Pin)
+  -> 判斷是不是 BTN_PA0_Pin
+  -> 如果是，就 HAL_GPIO_TogglePin(LED_PD12_GPIO_Port, LED_PD12_Pin)
+
+
+程式啟動流程
+------------
+
+main()
+  |
+  v
+HAL_Init()
+  |
+  v
+SystemClock_Config()
+  |
+  v
+MX_GPIO_Init()
+  |
+  v
+MX_I2C1_Init()
+MX_I2S3_Init()
+MX_SPI1_Init()
+MX_USB_OTG_FS_HCD_Init()
+  |
+  v
+Examples_Init()
+  |
+  v
+Example001_ButtonInterrupt_Init()
+  |
+  v
+while(1)
+  |
+  v
+Examples_Loop()
+  |
+  v
+Example001_ButtonInterrupt_Loop()
+  |
+  v
+HAL_Delay(500)
+  |
+  v
+Toggle PD13 / PD14 / PD15
+
+
+按鈕中斷流程
+------------
+
+PA0 是 STM32F407G-DISC1 板上的藍色 User Button。
+
+根據板子電路：
+- PA0 平常透過外部 pull-down 為 Low。
+- 按下 B1 時，PA0 被拉到 High。
+- 因此 CubeMX 設定使用 Rising edge interrupt。
+- Pull-up/Pull-down 設為 No pull，因為板上已有外部電阻。
+
+按下按鈕時：
+PA0 從 Low 變 High
+  |
+  v
+產生 Rising Edge
+  |
+  v
+EXTI line 0 觸發
+  |
+  v
+EXTI0_IRQHandler()
+  |
+  v
+HAL_GPIO_EXTI_IRQHandler(BTN_PA0_Pin)
+  |
+  v
+HAL_GPIO_EXTI_Callback(GPIO_Pin)
+  |
+  v
+Examples_EXTI_Callback(GPIO_Pin)
+  |
+  v
+Example001_ButtonInterrupt_EXTI_Callback(GPIO_Pin)
+  |
+  v
+if (GPIO_Pin == BTN_PA0_Pin)
+  |
+  v
+HAL_GPIO_TogglePin(LED_PD12_GPIO_Port, LED_PD12_Pin)
+
+
+為什麼不自己寫 EXTI0_IRQHandler？
+---------------------------------
+
+在 HAL/CubeMX 專案裡，EXTI0_IRQHandler() 通常由 CubeMX 產生在：
+
+Core/Src/stm32f4xx_it.c
+
+我們不要自己重寫它。
+
+正確做法是使用 HAL 提供的 callback：
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+
+CubeMX/HAL 負責：
+- EXTI pending flag 清除
+- IRQHandler 入口
+- 呼叫 HAL callback
+
+我們自己負責：
+- 在 callback 裡判斷是哪個 pin
+- 執行自己的應用邏輯
+
+
+目前分層觀念
+------------
+
+main.c
+  = 系統入口、初始化、callback 轉接
+
+examples.h
+  = 所有 example 對外函式宣告
+
+examples.c
+  = example selector，決定目前跑哪個案例
+
+example_001_button_interrupt.c
+  = 第 001 個案例的實際功能
+
+HAL Driver
+  = ST 提供的底層 API，例如 HAL_GPIO_TogglePin()
+
