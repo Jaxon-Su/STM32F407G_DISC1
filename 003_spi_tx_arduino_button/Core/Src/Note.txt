@@ -1,0 +1,97 @@
+﻿STM32 HAL Example 003 呼叫關係筆記
+===================================
+
+目前專案目標：
+用 HAL/CubeMX 練習「PA0 按鈕觸發 SPI2 Master 傳送資料」。
+這個案例模仿課程的 Arduino Slave 範例，但目前沒有 Arduino 也可以先燒錄觀察 LED 行為。
+
+1. main.c
+---------
+main.c 仍然是 CubeMX 產生的程式入口，負責初始化 HAL、時鐘、GPIO、SPI2。
+
+啟動流程：
+- HAL_Init()
+- SystemClock_Config()
+- MX_GPIO_Init()
+- MX_SPI2_Init()
+- Example003_SpiTxArduinoButton_Init()
+- while(1) 裡一直呼叫 Example003_SpiTxArduinoButton_Loop()
+
+main.c 不直接寫 SPI 傳送邏輯，只負責把流程轉交給 example_003_spi_tx_arduino_button.c。
+
+2. example_003_spi_tx_arduino_button.c
+--------------------------------------
+這是案例 003 的主要邏輯。
+
+Init：
+- 關閉 LD4 / LD5，讓 LED 從固定狀態開始。
+
+Loop：
+- 讀取 PA0/B1 按鈕。
+- 沒按下就 return，不做事。
+- 按下後 HAL_Delay(200) 做簡單 debounce。
+- 先送 1 byte 的字串長度。
+- 再送字串內容。
+- 傳送成功 toggle LD4。
+- 傳送失敗 toggle LD5。
+- 等待按鈕放開，避免按住時連續傳送很多次。
+
+3. SPI2 腳位
+------------
+- PB12 -> SPI2_NSS
+- PB13 -> SPI2_SCK
+- PB14 -> SPI2_MISO，目前程式沒有使用接收，但 CubeMX 仍可配置
+- PB15 -> SPI2_MOSI
+- PA0  -> B1 Blue PushButton
+
+如果未來接 Arduino UNO：
+- STM32 PB13 SCK  -> Arduino D13 SCK
+- STM32 PB15 MOSI -> Arduino D11 MOSI
+- STM32 PB14 MISO -> Arduino D12 MISO，可先不接
+- STM32 PB12 NSS  -> Arduino D10 SS
+- STM32 GND       -> Arduino GND
+
+注意：STM32F407 是 3.3V，Arduino UNO 多數是 5V。STM32 輸出 3.3V 給 Arduino 通常可被讀成 HIGH，但 Arduino 若回送 5V 到 STM32 MISO 會有風險。沒有要接收時可先不要接 MISO。
+
+4. SPI 參數
+-----------
+- Master
+- 2-line full duplex
+- 8-bit data
+- CPOL low
+- CPHA first edge
+- Hardware NSS output
+- Baud prescaler /32
+- MSB first
+
+CPOL low + CPHA first edge = SPI Mode 0。
+Arduino 預設常見也是 Mode 0，所以這個設定比較適合後續接 Arduino Slave。
+
+5. 沒有 Arduino 時怎麼驗證
+--------------------------
+可以先燒錄到 STM32F407G-DISC1：
+- 按下藍色 B1/PA0。
+- 如果 HAL_SPI_Transmit() 回傳 HAL_OK，LD4 會 toggle。
+- 如果失敗，LD5 會 toggle。
+
+但只看 LED 只能確認「HAL 流程有跑完」，不能確認 MOSI/SCK/NSS 的實際波形。
+
+想確認真正 SPI 波形，需要：
+- 邏輯分析儀，或
+- 示波器，或
+- 之後接 Arduino / 另一塊 MCU 當 Slave。
+
+6. 對應課程 driver-layer demo
+----------------------------
+課程原本：
+- SPI2_GPIOInits() 設 PB12/PB13/PB15 alternate function
+- SPI2_Inits() 設 SPI2 master/mode/speed/CPOL/CPHA/NSS
+- SPI_SSOEConfig(SPI2, ENABLE) 開啟硬體 NSS output
+- 按 PA0 後，先送 dataLen，再送 user_data
+
+HAL/CubeMX 版本：
+- GPIO alternate function 設定由 HAL_SPI_MspInit() / CubeMX 負責
+- SPI2 參數由 MX_SPI2_Init() 負責
+- 送資料用 HAL_SPI_Transmit()
+- 傳完後用 __HAL_SPI_DISABLE(&hspi2) 讓硬體 NSS 回到 high
+- PA0 按鈕用 HAL_GPIO_ReadPin()
