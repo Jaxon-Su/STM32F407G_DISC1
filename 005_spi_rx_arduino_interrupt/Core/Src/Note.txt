@@ -1,0 +1,73 @@
+005 SPI RX Interrupt Arduino/Slave Note
+=======================================
+
+目標
+----
+把課程的 SPI interrupt receive demo 搬成 STM32 HAL / CubeMX 寫法。
+本案例中 STM32F407G-DISC1 是 SPI master，Arduino 或其他 SPI slave 在資料準備好時，用一條 GPIO 線通知 STM32。
+STM32 收到外部中斷後，才開始透過 SPI2 逐 byte 讀資料，直到收到 '\0' 或 buffer 滿為止。
+
+硬體腳位
+--------
+STM32 SPI2:
+- PB12 -> SPI2_NSS
+- PB13 -> SPI2_SCK
+- PB14 -> SPI2_MISO
+- PB15 -> SPI2_MOSI
+
+Slave 通知線:
+- PD6 -> SLAVE_INT_PD6，falling edge EXTI，pull-up
+
+LED:
+- LD3 / PD13：收到 PD6 data available interrupt 時 toggle
+- LD4 / PD12：完成一次接收時 toggle
+- LD5 / PD14：SPI transfer timeout 或 HAL error 時 toggle
+- LD6 / PD15：接收期間亮起，結束後熄滅
+
+呼叫關係
+--------
+main.c:
+1. HAL_Init()
+2. SystemClock_Config()
+3. MX_GPIO_Init()
+   - 設定 PD6 EXTI falling edge + pull-up
+   - enable EXTI9_5_IRQn
+4. MX_SPI2_Init()
+   - SPI2 master full-duplex
+   - hardware NSS output
+   - CPOL Low / CPHA 1 Edge / MSB first
+5. Example005_SpiRxArduinoInterrupt_Init()
+6. while(1) 呼叫 Example005_SpiRxArduinoInterrupt_Loop()
+
+中斷流程
+--------
+1. slave 有資料時，把 PD6 拉低。
+2. STM32 進 EXTI9_5_IRQHandler()。
+3. HAL_GPIO_EXTI_IRQHandler(SLAVE_INT_PD6_Pin) 清 pending bit。
+4. HAL 呼叫 HAL_GPIO_EXTI_Callback()。
+5. example layer 設定 s_dataAvailable = 1。
+6. main loop 偵測到 s_dataAvailable，開始 SPI2 讀取。
+7. 每次 HAL_SPI_TransmitReceive_IT() 都送出 dummy byte 0xFF，讓 master 產生 clock。
+8. slave 同時從 MISO 回傳 1 byte。
+9. SPI2_IRQHandler() 呼叫 HAL_SPI_IRQHandler()。
+10. HAL 呼叫 HAL_SPI_TxRxCpltCallback()。
+11. example layer 把 s_readByte 存進 s_rcvBuff。
+12. 收到 '\0' 或 buffer 滿時停止。
+
+為什麼 master 接收也要 transmit dummy byte
+----------------------------------------
+SPI 沒有獨立的 read clock。Master 必須送出資料，SCK 才會動。
+所以就算 STM32 只是想收資料，也要送 dummy byte，例如 0xFF。
+Slave 會在這些 clock 期間把資料放到 MISO。
+
+沒有 Arduino 時
+--------------
+本案例仍可 build，但實際不會收到正確訊息。
+如果 PD6 沒有被 slave 拉低，程式會一直等待 data available。
+如果你手動觸發 PD6，但 MISO 沒有 slave 驅動，收到的資料可能是 floating value，最後可能因 buffer 滿才停止。
+
+電壓注意
+--------
+STM32F407 是 3.3V 邏輯。Arduino UNO 多數是 5V。
+STM32 -> Arduino 通常可被 Arduino 判成 HIGH，但 Arduino -> STM32 的 MISO / interrupt 線若是 5V，就可能傷到 STM32。
+真正接 Arduino UNO 時建議使用 level shifter，或確認該線路已被限制在 3.3V。

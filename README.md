@@ -1,4 +1,4 @@
-﻿# STM32F407G-DISC1 HAL 練習專案
+# STM32F407G-DISC1 HAL 練習專案
 
 這個 repository 是個人的 STM32 HAL / CubeMX 學習筆記與範例集合，目標板為 `STM32F407G-DISC1`。
 
@@ -19,6 +19,7 @@
 | 002 | `002_spi_tx_testing` | SPI2 傳送測試 | 使用 `SPI2` master mode，透過 `PB15/MOSI` 送出 `"Hello world"`，並從 `PB13/SCK` 產生 clock。 |
 | 003 | `003_spi_tx_arduino_button` | SPI2 按鈕觸發傳送 | 按下 `PA0` 後，透過 `SPI2` 送出 `[length][payload]`，使用 hardware `PB12/NSS`、`PB13/SCK`、`PB15/MOSI`。 |
 | 004 | `004_spi_cmd_arduino_slave` | SPI command/response 協定 | 按下 `PA0` 後逐步執行 SPI command，使用 `HAL_SPI_TransmitReceive()` 驗證 slave ACK 與回傳資料。 |
+| 005 | `005_spi_rx_arduino_interrupt` | SPI interrupt receive | Slave 透過 `PD6` external interrupt 通知 STM32 有資料，STM32 使用 `HAL_SPI_TransmitReceive_IT()` 逐 byte 讀到 `\0` 結尾。 |
 
 ## 資料夾結構
 
@@ -46,6 +47,12 @@ STM32F407G_DISC1/
     Core/
     Drivers/
     004_spi_cmd_arduino_slave.ioc
+    README.md
+
+  005_spi_rx_arduino_interrupt/
+    Core/
+    Drivers/
+    005_spi_rx_arduino_interrupt.ioc
     README.md
 
   README.md
