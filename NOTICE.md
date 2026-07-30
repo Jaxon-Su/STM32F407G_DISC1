@@ -23,5 +23,7 @@ The personal learning code is primarily under each example project's custom exam
 - `004_spi_cmd_arduino_slave/Core/Src/Note.txt`
 - `005_spi_rx_arduino_interrupt/Core/Src/example_005_spi_rx_arduino_interrupt.c`
 - `005_spi_rx_arduino_interrupt/Core/Src/Note.txt`
+- `006_spi_rx_arduino_interrupt_swv/Core/Src/example_006_spi_rx_arduino_interrupt_swv.c`
+- `006_spi_rx_arduino_interrupt_swv/Core/Src/Note.txt`
 
 No paid course source code, slides, or redistributed course materials are included in this repository.

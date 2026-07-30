@@ -20,6 +20,7 @@
 | 003 | `003_spi_tx_arduino_button` | SPI2 按鈕觸發傳送 | 按下 `PA0` 後，透過 `SPI2` 送出 `[length][payload]`，使用 hardware `PB12/NSS`、`PB13/SCK`、`PB15/MOSI`。 |
 | 004 | `004_spi_cmd_arduino_slave` | SPI command/response 協定 | 按下 `PA0` 後逐步執行 SPI command，使用 `HAL_SPI_TransmitReceive()` 驗證 slave ACK 與回傳資料。 |
 | 005 | `005_spi_rx_arduino_interrupt` | SPI interrupt receive | Slave 透過 `PD6` external interrupt 通知 STM32 有資料，STM32 使用 `HAL_SPI_TransmitReceive_IT()` 逐 byte 讀到 `\0` 結尾。 |
+| 006 | `006_spi_rx_arduino_interrupt_swv` | SPI RX interrupt + SWV | 在 005 的接收流程上加入 `printf()` retarget 到 SWV/ITM，收到 slave 字串後印到 ITM Data Console。 |
 
 ## 資料夾結構
 
@@ -53,6 +54,12 @@ STM32F407G_DISC1/
     Core/
     Drivers/
     005_spi_rx_arduino_interrupt.ioc
+    README.md
+
+  006_spi_rx_arduino_interrupt_swv/
+    Core/
+    Drivers/
+    006_spi_rx_arduino_interrupt_swv.ioc
     README.md
 
   README.md

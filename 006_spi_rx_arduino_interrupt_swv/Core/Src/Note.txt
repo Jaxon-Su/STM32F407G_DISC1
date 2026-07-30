@@ -1,0 +1,74 @@
+006 SPI RX Interrupt + SWV printf Note
+======================================
+
+目標
+----
+把課程的 SPI interrupt receive demo 搬成 STM32 HAL / CubeMX 寫法，並補上 SWV/ITM printf 輸出。
+STM32F407G-DISC1 是 SPI master；Arduino 或其他 SPI slave 在資料準備好時，使用一條 GPIO interrupt 線通知 STM32。
+STM32 收到通知後，用 SPI2 逐 byte 讀取資料，直到收到 '\0' 或 buffer 滿為止。
+
+和 005 的差異
+-------------
+005 重點是 SPI interrupt receive 流程。
+006 保留同樣的硬體流程，但加入：
+
+- `#include <stdio.h>`
+- `int __io_putchar(int ch)`
+- `ITM_SendChar()`
+- `printf("Rcvd data = %s\r\n", s_rcvBuff)`
+
+因此 006 更接近原始課程 demo：收到 Arduino 送來的字串後，透過 SWV ITM Data Console 觀察文字。
+
+硬體腳位
+--------
+STM32 SPI2:
+- PB12 -> SPI2_NSS
+- PB13 -> SPI2_SCK
+- PB14 -> SPI2_MISO
+- PB15 -> SPI2_MOSI
+
+Slave data available:
+- PD6 -> SLAVE_INT_PD6，falling edge EXTI，pull-up
+
+LED:
+- LD3 / PD13：收到 PD6 interrupt 時 toggle
+- LD4 / PD12：成功完成一次接收時 toggle
+- LD5 / PD14：SPI timeout 或 HAL error 時 toggle
+- LD6 / PD15：接收期間亮起，結束後熄滅
+
+主要流程
+--------
+1. Slave 有資料可讀時，把 PD6 拉低。
+2. STM32 進 `EXTI9_5_IRQHandler()`。
+3. `HAL_GPIO_EXTI_IRQHandler(SLAVE_INT_PD6_Pin)` 清 EXTI pending flag。
+4. HAL 呼叫 `HAL_GPIO_EXTI_Callback()`。
+5. callback 設定 `s_dataAvailable = 1`。
+6. main loop 中的 `Example006_SpiRxArduinoInterruptSwv_Loop()` 開始接收。
+7. 每次呼叫 `HAL_SPI_TransmitReceive_IT()` 送出 dummy byte `0xFF`，讓 master 產生 SCK。
+8. SPI transfer complete 後，HAL 呼叫 `HAL_SPI_TxRxCpltCallback()`。
+9. callback 把 `s_readByte` 存進 `s_rcvBuff`。
+10. 收到 '\0' 或 buffer 滿時停止接收。
+11. 成功時使用 `printf()` 把收到的字串送到 SWV ITM console。
+
+SWV 設定提醒
+------------
+要看到 `printf()`，需要在 STM32CubeIDE debug 設定中打開 SWV / ITM Data Console。
+常見設定方向：
+
+- Debug configuration 啟用 SWV
+- Core clock 填目前系統時鐘
+- ITM Stimulus Port 0 打開
+- 開啟 SWV ITM Data Console
+
+沒有打開 SWV 時，程式仍可跑，但你看不到 `printf()` 文字。
+
+沒有 Arduino 時
+--------------
+這個案例需要 Arduino 或其他 SPI slave 才能完整測試。
+沒有 slave 時，PD6 不會自動通知；即使手動觸發 PD6，MISO 沒有有效資料，也可能收到 floating value。
+
+電壓注意
+--------
+STM32F407 是 3.3V 邏輯。Arduino UNO 多數是 5V 邏輯。
+Arduino 的 MISO 或 data available interrupt 線如果輸出 5V 到 STM32，可能傷到 STM32。
+實際接線建議使用 level shifter，或確認 Arduino 端輸出已限制在 3.3V。
