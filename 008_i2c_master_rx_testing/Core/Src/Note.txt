@@ -1,0 +1,91 @@
+STM32 HAL Example 008 筆記
+===========================
+
+主題
+----
+把課程的 I2C master receive demo 搬成 HAL / CubeMX 版本。
+
+本案例不是直接讀固定資料，而是使用一個簡單 command protocol：
+
+1. Master 送 `0x51` 給 slave。
+2. Slave 回傳 payload 長度 `len`。
+3. Master 送 `0x52` 給 slave。
+4. Slave 回傳 `len` bytes payload。
+
+行為
+----
+1. `main.c` 初始化 HAL、system clock、GPIO、I2C1。
+2. 呼叫 `Example008_I2cMasterRxTesting_Init()`，清空 buffer 並關閉 LED。
+3. `while (1)` 中呼叫 `Example008_I2cMasterRxTesting_Loop()`。
+4. 按下板上 `PA0/B1` 後，做簡單 debounce。
+5. 用 `HAL_I2C_Master_Transmit()` 送 command `0x51`。
+6. 用 `HAL_I2C_Master_Receive()` 讀 1 byte 長度。
+7. 用 `HAL_I2C_Master_Transmit()` 送 command `0x52`。
+8. 用 `HAL_I2C_Master_Receive()` 讀 payload。
+9. 成功：切換 `LD4`。
+10. 失敗或沒有 slave ACK：切換 `LD5`。
+
+硬體接線
+--------
+STM32F407G-DISC1 作為 I2C master：
+
+- `PB6` -> `I2C1_SCL` -> slave SCL
+- `PB7` -> `I2C1_SDA` -> slave SDA
+- `GND` -> slave GND
+- `PA0` -> 板上藍色按鈕 B1
+
+I2C 是 open-drain bus，SCL/SDA 需要 pull-up。本案例使用內部 pull-up 方便練習；實際接外部模組建議使用外部 `3.3k` 或 `4.7k` pull-up 到 `3.3V`。
+
+如果 slave 模組已經把 SCL/SDA pull-up 到 `5V`，不要直接接 STM32F407，請改成 3.3V pull-up 或使用 level shifter。
+
+和 driver-layer 原理對照
+------------------------
+課程 driver-layer 裡：
+
+```c
+commandcode = 0x51;
+I2C_MasterSendData(&I2C1Handle, &commandcode, 1, SLAVE_ADDR, I2C_ENABLE_SR);
+I2C_MasterReceiveData(&I2C1Handle, &len, 1, SLAVE_ADDR, I2C_ENABLE_SR);
+
+commandcode = 0x52;
+I2C_MasterSendData(&I2C1Handle, &commandcode, 1, SLAVE_ADDR, I2C_ENABLE_SR);
+I2C_MasterReceiveData(&I2C1Handle, rcv_buf, len, SLAVE_ADDR, I2C_DISABLE_SR);
+```
+
+HAL 對應成：
+
+```c
+HAL_I2C_Master_Transmit(&hi2c1, slave_addr, &command, 1, timeout);
+HAL_I2C_Master_Receive(&hi2c1, slave_addr, &len, 1, timeout);
+```
+
+這個版本用 blocking API 表達同一個流程。`I2C_ENABLE_SR` 的精神是不要急著結束整段 transaction，讓 command 和後續 read 接在一起；HAL blocking API 會幫你處理 START/address/read/write/STOP 的細節。
+
+位址
+----
+`0x68` 是 7-bit slave address。
+
+HAL API 的 `DevAddress` 參數要放左移 1 bit 後的值：
+
+```c
+#define EXAMPLE008_SLAVE_ADDR_7BIT (0x68U)
+uint16_t slave_addr = (EXAMPLE008_SLAVE_ADDR_7BIT << 1);
+```
+
+Buffer 保護
+-----------
+原始課程 code 寫：
+
+```c
+rcv_buf[len+1] = '\0';
+```
+
+這裡搬成 HAL 時修成：
+
+```c
+rcv_buf[len] = '\0';
+```
+
+因為 C 字串結尾應該放在最後一個有效 byte 的下一格。例如收到 `len=5`，有效資料是 index `0..4`，字串結尾放 index `5`。
+
+另外本案例限制 `len <= 32`，避免 slave 回傳太大的長度造成 buffer overflow。

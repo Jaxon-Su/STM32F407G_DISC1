@@ -27,5 +27,7 @@ The personal learning code is primarily under each example project's custom exam
 - `006_spi_rx_arduino_interrupt_swv/Core/Src/Note.txt`
 - `007_i2c_master_tx_testing/Core/Src/example_007_i2c_master_tx_testing.c`
 - `007_i2c_master_tx_testing/Core/Src/Note.txt`
+- `008_i2c_master_rx_testing/Core/Src/example_008_i2c_master_rx_testing.c`
+- `008_i2c_master_rx_testing/Core/Src/Note.txt`
 
 No paid course source code, slides, or redistributed course materials are included in this repository.

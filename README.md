@@ -22,6 +22,7 @@
 | 005 | `005_spi_rx_arduino_interrupt` | SPI interrupt receive | Slave 透過 `PD6` external interrupt 通知 STM32 有資料，STM32 使用 `HAL_SPI_TransmitReceive_IT()` 逐 byte 讀到 `\0` 結尾。 |
 | 006 | `006_spi_rx_arduino_interrupt_swv` | SPI RX interrupt + SWV | 在 005 的接收流程上加入 `printf()` retarget 到 SWV/ITM，收到 slave 字串後印到 ITM Data Console。 |
 | 007 | `007_i2c_master_tx_testing` | I2C1 master transmit | 按下 `PA0` 後，透過 `PB6/SCL`、`PB9/SDA` 對 7-bit slave address `0x68` 傳送字串。 |
+| 008 | `008_i2c_master_rx_testing` | I2C1 command receive | 按下 `PA0` 後，透過 `PB6/SCL`、`PB7/SDA` 先讀長度再讀 payload，練習 I2C master receive。 |
 
 ## 資料夾結構
 
