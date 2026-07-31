@@ -1,0 +1,83 @@
+STM32 HAL Example 007 筆記
+===========================
+
+主題
+----
+把課程的 `010i2c_master_tx_testing.c` 搬成 HAL / CubeMX 版本。
+
+行為
+----
+1. `main.c` 初始化 HAL、system clock、GPIO、I2C1。
+2. 呼叫 `Example007_I2cMasterTxTesting_Init()`，先關閉所有 LED。
+3. `while (1)` 中呼叫 `Example007_I2cMasterTxTesting_Loop()`。
+4. 按下板上 `PA0/B1` 後，做簡單 debounce。
+5. 使用 `HAL_I2C_Master_Transmit()` 往 slave address `0x68` 傳送字串：
+   `We are testing I2C master Tx\n`
+6. 傳送成功：切換 `LD4`。
+7. 傳送失敗或沒有 slave ACK：切換 `LD5`。
+8. 每次按鈕接受後會切換 `LD3`，表示 firmware 有進入一次傳送流程。
+
+硬體接線
+--------
+STM32F407G-DISC1 作為 I2C master：
+
+- `PB6`  -> `I2C1_SCL` -> slave SCL
+- `PB9`  -> `I2C1_SDA` -> slave SDA
+- `GND`  -> slave GND
+- `PA0`  -> 板上藍色按鈕 B1
+
+I2C 是 open-drain bus，SCL/SDA 需要 pull-up。
+本案例在 HAL MSP 裡使用內部 pull-up：
+
+```c
+GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+GPIO_InitStruct.Pull = GPIO_PULLUP;
+GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+```
+
+實際接外部模組時，建議使用外部 `3.3k` 或 `4.7k` pull-up 到 `3.3V`。
+如果 slave 模組板上已經把 SCL/SDA pull-up 到 `5V`，不要直接接 STM32，請改成 3.3V pull-up 或使用 level shifter。
+
+和 driver-layer 原理對照
+------------------------
+課程 driver-layer 流程：
+
+1. 開 GPIOB clock。
+2. PB6/PB9 設為 alternate function mode。
+3. PB6/PB9 output type 設 open-drain。
+4. PB6/PB9 設 pull-up。
+5. Alternate function 選 AF4 I2C1。
+6. 開 I2C1 peripheral clock。
+7. 設定 I2C ACK、自身 address、SCL speed。
+8. enable I2C1。
+9. 按下 PA0 後送資料到 slave `0x68`。
+
+HAL / CubeMX 對應：
+
+- GPIOB clock、PB6/PB9 AF_OD、AF4、I2C1 clock：在 `HAL_I2C_MspInit()`。
+- I2C speed、own address、ACK 等 I2C 參數：在 `MX_I2C1_Init()`。
+- 實際傳送：在 `Example007_I2cMasterTxTesting_Loop()` 呼叫 `HAL_I2C_Master_Transmit()`。
+
+為什麼 address 要左移
+--------------------
+`0x68` 是 7-bit I2C slave address。
+
+STM32 HAL 的 `HAL_I2C_Master_Transmit()` 參數 `DevAddress` 要放「左移 1 bit 後的 address」，因為最低 bit 會留給 read/write bit。
+
+所以程式寫：
+
+```c
+#define EXAMPLE007_SLAVE_ADDR_7BIT    (0x68U)
+
+HAL_I2C_Master_Transmit(&hi2c1,
+                        (EXAMPLE007_SLAVE_ADDR_7BIT << 1),
+                        data,
+                        size,
+                        timeout);
+```
+
+如果沒有接 I2C slave
+-------------------
+沒有接 slave 或 slave address 不對時，master 送出 address 後收不到 ACK，`HAL_I2C_Master_Transmit()` 會回傳錯誤或 timeout。
+
+這時 `LD5` 會 toggle。這不是程式壞掉，而是 bus 上沒有裝置回應。
