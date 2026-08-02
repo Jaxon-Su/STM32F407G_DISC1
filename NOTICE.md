@@ -37,3 +37,4 @@ No paid course source code, slides, or redistributed course materials are includ
 - `012_uart_tx/Core/Src/Note.txt` and custom HAL example source
 - `013_uart_tx_rx_it/Core/Src/Note.txt` and custom HAL example source
 - `014_ds1307_rtc_i2c/Core/Src/Note.txt` and custom HAL example source
+- `015_adc_voltage_current/Core/Src/Note.txt` and custom HAL ADC example source

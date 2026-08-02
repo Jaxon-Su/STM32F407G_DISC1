@@ -1,0 +1,46 @@
+STM32 HAL Example 015 筆記
+===========================
+
+主題
+----
+ADC polling 讀取 `PA1 / ADC1_IN1`，並換算成電壓與簡易電流估算。
+
+呼叫關係
+--------
+1. `main.c`
+   - `HAL_Init()`
+   - `SystemClock_Config()`
+   - `MX_GPIO_Init()`
+   - `MX_ADC1_Init()`
+   - `Example015_AdcVoltageCurrent_Init()`
+   - while loop 呼叫 `Example015_AdcVoltageCurrent_Loop()`
+
+2. `HAL_ADC_MspInit()`
+   - 開啟 `ADC1` clock
+   - 把 `PA1` 設成 analog mode
+
+3. `Example015_AdcVoltageCurrent_Loop()`
+   - 每 500ms 讀一次 ADC
+   - 更新 `g_adc_raw`
+   - 更新 `g_adc_voltage_mv`
+   - 更新 `g_adc_current_ma`
+
+換算
+----
+12-bit ADC 範圍是 `0..4095`：
+
+```c
+voltage_mV = raw * 3300 / 4095;
+```
+
+簡易 shunt 電流估算：
+
+```c
+current_mA = voltage_mV * 1000 / (shunt_mOhm * gain);
+```
+
+這只是學習用公式。真實電流量測要看 shunt 阻值、放大器 gain、offset、共模電壓與量測方向。
+
+安全
+----
+`PA1` 只能輸入 `0..3.3V`。量測高電壓前一定要先分壓，量測電流前要確認 shunt 或 sensor 輸出不會超過 3.3V。

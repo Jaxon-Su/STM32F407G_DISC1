@@ -29,6 +29,7 @@
 | 012 | `012_uart_tx` | USART2 transmit | 按下 `PA0` 後，透過 `USART2 PA2` 傳送字串。 |
 | 013 | `013_uart_tx_rx_it` | USART2 TX + RX interrupt | 傳送訊息並使用 UART RX interrupt 接收同長度回覆。 |
 | 014 | `014_ds1307_rtc_i2c` | DS1307 RTC over I2C | 使用 HAL I2C memory read/write 操作 DS1307 RTC。 |
+| 015 | `015_adc_voltage_current` | ADC voltage/current basics | 使用 `ADC1_IN1 / PA1` polling 讀取類比電壓，並換算成 mV 與簡易 mA。 |
 
 ## 資料夾結構
 
