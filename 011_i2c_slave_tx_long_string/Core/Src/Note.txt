@@ -4,20 +4,180 @@ STM32 HAL Example Note
 案例：011 I2C Slave TX Long String
 來源概念：014i2c_slave_tx_string2.c
 
-核心行為
---------
-STM32 作為 I2C slave 0x68，回傳 4-byte 長度與長字串 payload。
+目標
+----
+這個案例延伸 010，STM32F407 一樣作為 I2C slave，但這次 payload 比 1 byte length 還長。
+
+Slave address 是 `0x68`。Master 使用兩個 command：
+
+- `0x51`：讀 payload 長度。
+- `0x52`：讀 payload 內容。
+
+與 010 最大差異：
+
+- 010 的長度只有 1 byte。
+- 011 的長度用 4 byte 表示，支援比較長的 payload。
 
 硬體設定
 --------
-PB6/PB7 I2C1 slave
 
-搬移重點
+- `PB6`：I2C1 SCL
+- `PB7`：I2C1 SDA
+- I2C mode：slave
+- STM32 own address：`0x68`
+- `PD12 / LD4`：每送完 1 byte toggle
+- `PD13 / LD3`：收到 command toggle
+- `PD14 / LD5`：error toggle
+
+PB6/PB7 在 `HAL_I2C_MspInit()` 裡設定成 alternate function open-drain：
+
+```c
+GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+GPIO_InitStruct.Pull = GPIO_PULLUP;
+GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+```
+
+長字串資料
+----------
+
+資料存在 static buffer：
+
+```c
+static const uint8_t tx_buf[] =
+    "HiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHiHi...123";
+```
+
+初始化時計算長度：
+
+```c
+data_len = strlen((const char *)tx_buf);
+```
+
+這個長度是 `uint32_t`，所以送給 master 時拆成 4 個 byte。
+
+4-byte 長度怎麼送
+-----------------
+
+當 master command 是 `0x51`，slave 每次被讀 1 byte 時，送出 `data_len` 的某一個 byte：
+
+```c
+tx_byte = (uint8_t)((data_len >> ((length_index % 4U) * 8U)) & 0xFFU);
+length_index++;
+```
+
+這是 little-endian 順序：
+
+```text
+第 0 byte: data_len bit[7:0]
+第 1 byte: data_len bit[15:8]
+第 2 byte: data_len bit[23:16]
+第 3 byte: data_len bit[31:24]
+```
+
+如果 master 端要組回長度，概念是：
+
+```c
+len = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+```
+
+payload 怎麼送
+--------------
+
+當 master command 是 `0x52`，slave 每次被讀 1 byte 時送出下一個字元：
+
+```c
+tx_byte = tx_buf[data_index++];
+if (data_index >= data_len)
+{
+    data_index = 0;
+    command_code = 0xFFU;
+}
+```
+
+也就是 master 連續 read，多次 address/read transaction 或連續讀 byte，slave 依 `data_index` 一個一個吐資料。
+
+callback 流程
+-------------
+
+本案例和 010 一樣以 listen mode 為核心：
+
+```text
+Example011_Init()
+  -> HAL_I2C_EnableListen_IT()
+  -> master address match
+  -> HAL_I2C_AddrCallback()
+```
+
+在 `HAL_I2C_AddrCallback()` 中：
+
+```text
+master write command
+  -> HAL_I2C_Slave_Receive_IT(&rx_command, 1)
+
+master read data
+  -> 根據 command_code 準備 tx_byte
+  -> HAL_I2C_Slave_Transmit_IT(&tx_byte, 1)
+```
+
+收到 command 後：
+
+```c
+HAL_I2C_SlaveRxCpltCallback()
+```
+
+如果 command 是 `0x51`：
+
+```c
+length_index = 0;
+```
+
+如果 command 是 `0x52`：
+
+```c
+data_index = 0;
+```
+
+這樣每次新的 command 都會從頭送 length 或 payload。
+
+為什麼要 command_code
+--------------------
+
+Slave transmit callback 發生時，slave 只知道 master 正在讀它，但不知道 master 想要什麼。
+
+所以 master 必須先 write 一個 command：
+
+```text
+0x51：我等一下要讀長度
+0x52：我等一下要讀內容
+```
+
+Slave 收到 command 後記在：
+
+```c
+command_code = rx_command;
+```
+
+下一次 master read，slave 才知道要送 length byte 還是 payload byte。
+
+學習重點
 --------
-- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
-- 實際範例邏輯集中在 Core/Src/example_*.c。
-- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
 
-注意
-----
-I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。
+010 和 011 的本質都是 I2C slave state machine：
+
+```text
+listen
+  -> address match
+  -> command receive complete
+  -> remember command
+  -> address match again
+  -> transmit one byte based on command/index
+  -> listen complete
+  -> re-enable listen
+```
+
+011 額外練習：
+
+- 長度用 4 byte 拆送
+- payload index 管理
+- long string protocol 設計
+- master/slave 之間用 command 建立簡單資料協定

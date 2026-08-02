@@ -4,20 +4,285 @@ STM32 HAL Example Note
 案例：014 DS1307 RTC I2C
 來源概念：017rtc_lcd.c
 
-核心行為
---------
-使用 HAL I2C memory read/write 操作 DS1307，設定並每秒讀回時間日期。LCD 部分先以 Note 說明為 optional。
+目標
+----
+這個案例練習用 STM32 HAL I2C 操作 DS1307 RTC。
+
+程式啟動後：
+
+1. 設定日期。
+2. 設定時間。
+3. 每 1 秒讀回時間。
+4. 每 1 秒讀回日期。
+5. 成功時 LD4 toggle，錯誤時 LD5 toggle。
+
+LCD 顯示在本 HAL 搬移版中先不實作，重點放在 I2C memory read/write 和 BCD 格式。
 
 硬體設定
 --------
-PB6/PB7 I2C1, DS1307 address 0x68
 
-搬移重點
+- `PB6`：I2C1 SCL
+- `PB7`：I2C1 SDA
+- I2C speed：100 kHz
+- DS1307 7-bit address：`0x68`
+- STM32 I2C own address：`0x61`，本案例作為 master 時通常不是重點
+- `PD12 / LD4`：I2C read/write 成功時 toggle
+- `PD14 / LD5`：I2C error 時 toggle
+
+接線概念：
+
+```text
+STM32 PB6/SCL -> DS1307 SCL
+STM32 PB7/SDA -> DS1307 SDA
+STM32 GND     -> DS1307 GND
+```
+
+注意 DS1307 模組常見是 5V 模組，I2C pull-up 可能拉到 5V。STM32F407 是 3.3V，請確認 SDA/SCL pull-up 是 3.3V，或使用 level shifter。
+
+DS1307 register map
+-------------------
+
+本案例使用：
+
+```c
+#define DS1307_REG_SECONDS (0x00U)
+#define DS1307_REG_DAY     (0x03U)
+```
+
+DS1307 時間暫存器從 `0x00` 開始：
+
+```text
+0x00 seconds
+0x01 minutes
+0x02 hours
+```
+
+日期暫存器從 `0x03` 開始：
+
+```text
+0x03 day
+0x04 date
+0x05 month
+0x06 year
+```
+
+HAL_I2C_Mem_Write / Mem_Read 是什麼
+----------------------------------
+
+DS1307 是「I2C slave + register address」型裝置。
+
+要寫 DS1307，不只是送資料，還要先指定 register address。
+
+HAL 提供 memory API：
+
+```c
+HAL_I2C_Mem_Write(&hi2c1,
+                  (DS1307_ADDR_7BIT << 1),
+                  reg,
+                  I2C_MEMADD_SIZE_8BIT,
+                  data,
+                  len,
+                  timeout);
+```
+
+概念流程：
+
+```text
+START
+slave address + write
+register address
+data bytes
+STOP
+```
+
+讀取：
+
+```c
+HAL_I2C_Mem_Read(&hi2c1,
+                 (DS1307_ADDR_7BIT << 1),
+                 reg,
+                 I2C_MEMADD_SIZE_8BIT,
+                 data,
+                 len,
+                 timeout);
+```
+
+概念流程：
+
+```text
+START
+slave address + write
+register address
+RESTART
+slave address + read
+read data bytes
+STOP
+```
+
+所以 `HAL_I2C_Mem_Read/Write` 很適合 EEPROM、RTC、sensor register 這類裝置。
+
+為什麼 address 要左移
+--------------------
+
+DS1307 7-bit address 是：
+
+```c
+#define DS1307_ADDR_7BIT (0x68U)
+```
+
+HAL I2C API 的 DevAddress 參數使用左對齊格式，最低 bit 留給 read/write bit，所以呼叫時用：
+
+```c
+(DS1307_ADDR_7BIT << 1)
+```
+
+`0x68 << 1 = 0xD0`。
+
+HAL 會依照 read 或 write 自己處理 R/W bit。
+
+BCD 是什麼
+----------
+
+DS1307 的時間不是用一般 binary 儲存，而是用 BCD。
+
+BCD = Binary Coded Decimal。
+
+例如十進位 59：
+
+```text
+十位數 5 -> high nibble
+個位數 9 -> low nibble
+BCD = 0x59
+```
+
+不是 binary 的 `59 = 0x3B`。
+
+所以寫入 DS1307 前，要 decimal 轉 BCD：
+
+```c
+static uint8_t DecToBcd(uint8_t value)
+{
+    return (uint8_t)(((value / 10U) << 4U) | (value % 10U));
+}
+```
+
+讀出 DS1307 後，要 BCD 轉 decimal：
+
+```c
+static uint8_t BcdToDec(uint8_t value)
+{
+    return (uint8_t)(((value >> 4U) * 10U) + (value & 0x0FU));
+}
+```
+
+設定時間
 --------
-- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
-- 實際範例邏輯集中在 Core/Src/example_*.c。
-- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
 
-注意
-----
-I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。
+```c
+static HAL_StatusTypeDef Ds1307SetTime(const RtcTime *time)
+{
+    uint8_t data[3];
+    data[0] = DecToBcd(time->seconds) & 0x7FU;
+    data[1] = DecToBcd(time->minutes);
+    data[2] = DecToBcd(time->hours);
+
+    return HAL_I2C_Mem_Write(&hi2c1,
+                             (DS1307_ADDR_7BIT << 1),
+                             DS1307_REG_SECONDS,
+                             I2C_MEMADD_SIZE_8BIT,
+                             data,
+                             3,
+                             DS1307_TIMEOUT_MS);
+}
+```
+
+`seconds & 0x7F` 是為了確保 CH bit 為 0。
+
+DS1307 seconds register bit7 是 CH clock halt：
+
+- `1`：停止 oscillator
+- `0`：啟動 oscillator
+
+所以要讓 RTC 跑起來，seconds bit7 不能是 1。
+
+讀取時間
+--------
+
+```c
+HAL_I2C_Mem_Read(... DS1307_REG_SECONDS ... data, 3 ...)
+```
+
+讀出：
+
+```text
+data[0] seconds BCD
+data[1] minutes BCD
+data[2] hours BCD
+```
+
+轉換：
+
+```c
+time->seconds = BcdToDec(data[0] & 0x7FU);
+time->minutes = BcdToDec(data[1]);
+time->hours   = BcdToDec(data[2] & 0x3FU);
+```
+
+`hours & 0x3F` 是為了保留 24-hour 格式下的 hour bits，避免控制 bit 影響數值。
+
+主循環
+------
+
+```c
+if ((HAL_GetTick() - last_tick) < 1000U) return;
+last_tick = HAL_GetTick();
+
+status = Ds1307GetTime(&current_time);
+if (status == HAL_OK)
+{
+    status = Ds1307GetDate(&current_date);
+}
+ShowResult(status);
+```
+
+這是一種 non-blocking-ish 的時間節奏：main loop 一直跑，但只有每 1000 ms 才讀一次 RTC。
+
+這裡的 `HAL_GetTick()` 來自 SysTick，每 1ms 遞增一次。
+
+014 有沒有使用 interrupt
+-----------------------
+
+本案例主要使用 blocking/polling I2C memory API：
+
+```c
+HAL_I2C_Mem_Write()
+HAL_I2C_Mem_Read()
+```
+
+所以應用層沒有 I2C callback。
+
+雖然專案裡有：
+
+```c
+I2C1_EV_IRQHandler()
+I2C1_ER_IRQHandler()
+```
+
+但這個案例的主要資料流程不是靠 `HAL_I2C_Mem_Read_IT()` 或 callback 完成，而是 blocking memory read/write 函式返回 `HAL_OK` 或 error。
+
+學習重點
+--------
+
+014 的重點有三個：
+
+1. I2C register device 的讀寫模型。
+2. HAL memory API 如何幫你處理 register address + repeated start。
+3. DS1307 使用 BCD，不是一般 binary。
+
+理解這個案例後，很多 I2C sensor 也會很像：
+
+```text
+指定 register address
+讀/寫 N bytes
+把 raw register value 轉成實際物理量
+```

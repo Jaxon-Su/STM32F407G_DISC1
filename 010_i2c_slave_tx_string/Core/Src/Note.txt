@@ -4,20 +4,214 @@ STM32 HAL Example Note
 案例：010 I2C Slave TX String
 來源概念：013i2c_slave_tx_string.c
 
-核心行為
---------
-STM32 作為 I2C slave 0x69，依 master command 0x51/0x52 回傳長度與字串。
+目標
+----
+這個案例練習「STM32F407 當 I2C slave」，由外部 master 讀取 STM32 內部準備好的字串。
+
+Master 會用 command 決定要讀什麼：
+
+- `0x51`：讀字串長度，slave 回傳 1 byte length。
+- `0x52`：讀字串內容，slave 每次被 master read 時回傳 1 byte payload。
+
+本案例的 slave address 是 `0x69`，字串是：
+
+```c
+"STM32 Slave mode testing.."
+```
 
 硬體設定
 --------
-PB6/PB7 I2C1 slave
 
-搬移重點
---------
-- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
-- 實際範例邏輯集中在 Core/Src/example_*.c。
-- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
+- `PB6`：I2C1 SCL
+- `PB7`：I2C1 SDA
+- I2C mode：slave
+- STM32 own address：`0x69`
+- `PD12 / LD4`：slave 成功送出 1 byte 後 toggle
+- `PD13 / LD3`：slave 收到 command 後 toggle
+- `PD14 / LD5`：listen 或 I2C error 時 toggle
 
-注意
-----
-I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。
+I2C bus 是 open-drain 架構，需要 pull-up。此 HAL 專案在 `HAL_I2C_MspInit()` 中設定：
+
+```c
+GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+GPIO_InitStruct.Pull = GPIO_PULLUP;
+GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+```
+
+如果外部 master 板子已經有 3.3V pull-up，可以視情況改成 `GPIO_NOPULL`。不要用 5V pull-up 直接拉 STM32 I2C 線。
+
+main.c 的角色
+-------------
+
+`main.c` 只做初始化與呼叫 example layer：
+
+```c
+HAL_Init();
+SystemClock_Config();
+MX_GPIO_Init();
+MX_I2C1_Init();
+Example010_I2cSlaveTxString_Init();
+
+while (1)
+{
+    Example010_I2cSlaveTxString_Loop();
+}
+```
+
+真正案例邏輯在：
+
+```c
+Core/Src/example_010_i2c_slave_tx_string.c
+```
+
+為什麼 slave 要 EnableListen
+----------------------------
+
+I2C slave 不知道 master 什麼時候會來找它，所以不能像 master 一樣主動開始 transaction。
+
+本案例用：
+
+```c
+HAL_I2C_EnableListen_IT(&hi2c1);
+```
+
+意思是讓 I2C1 進入 listen mode，等待匯流排上是否有人呼叫自己的 address。
+
+當 master 呼叫 address，HAL 會進：
+
+```c
+HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c,
+                     uint8_t TransferDirection,
+                     uint16_t AddrMatchCode)
+```
+
+這個 callback 是 slave 模式很重要的入口。它代表「我的 slave address 被 master 選中了」。
+
+TransferDirection 怎麼看
+------------------------
+
+在 `HAL_I2C_AddrCallback()` 中：
+
+```c
+if (TransferDirection == I2C_DIRECTION_TRANSMIT)
+{
+    HAL_I2C_Slave_Receive_IT(&hi2c1, &rx_command, 1);
+}
+else
+{
+    HAL_I2C_Slave_Transmit_IT(&hi2c1, &tx_byte, 1);
+}
+```
+
+這裡的命名容易混淆。`TransferDirection` 是從 master 角度看：
+
+- `I2C_DIRECTION_TRANSMIT`：master 要寫資料給 slave，所以 slave 要 receive。
+- 另一種方向：master 要從 slave 讀資料，所以 slave 要 transmit。
+
+所以流程是：
+
+```text
+Master write command
+  -> Slave AddrCallback(direction transmit)
+  -> Slave 啟動 Receive_IT 收 1 byte command
+  -> HAL_I2C_SlaveRxCpltCallback()
+  -> command_code = rx_command
+
+Master read data
+  -> Slave AddrCallback(direction receive)
+  -> Slave 根據 command_code 準備 tx_byte
+  -> Slave 啟動 Transmit_IT 送 1 byte
+  -> HAL_I2C_SlaveTxCpltCallback()
+```
+
+callback 角色
+-------------
+
+本案例主要 callback：
+
+```c
+HAL_I2C_AddrCallback()
+HAL_I2C_SlaveRxCpltCallback()
+HAL_I2C_SlaveTxCpltCallback()
+HAL_I2C_ListenCpltCallback()
+HAL_I2C_ErrorCallback()
+```
+
+`HAL_I2C_AddrCallback()`：
+
+- master 呼叫 slave address 時進來。
+- 判斷 master 是 write 還是 read。
+- 如果 master write，啟動 `HAL_I2C_Slave_Receive_IT()` 收 command。
+- 如果 master read，根據 command 準備資料並啟動 `HAL_I2C_Slave_Transmit_IT()`。
+
+`HAL_I2C_SlaveRxCpltCallback()`：
+
+- slave 收完 master 寫來的 1 byte command。
+- 把 `rx_command` 存到 `command_code`。
+
+`HAL_I2C_SlaveTxCpltCallback()`：
+
+- slave 已經送完 1 byte 給 master。
+- toggle LD4 表示有一個 byte 被讀走。
+
+`HAL_I2C_ListenCpltCallback()`：
+
+- listen mode 結束。
+- 設 `listen_restart = 1`，讓 main loop 重新 arm listen。
+
+`HAL_I2C_ErrorCallback()`：
+
+- I2C 發生錯誤，例如 NACK、bus error。
+- reset command/index，重新 listen。
+
+為什麼 listen_restart 不直接在 callback 呼叫 ArmListen
+----------------------------------------------------
+
+callback 是在 interrupt 流程中被 HAL 呼叫，應該短一點。
+
+本案例在 callback 裡只設：
+
+```c
+listen_restart = 1;
+```
+
+然後在 main loop 裡：
+
+```c
+if (listen_restart)
+{
+    listen_restart = 0;
+    ArmListen();
+}
+```
+
+這樣 callback 只做狀態通知，真正重新啟用 listen 留給 main loop 處理，結構比較乾淨。
+
+和 master RX 案例的關係
+----------------------
+
+009 是 master：
+
+```text
+Master 主動 transmit / receive
+```
+
+010 是 slave：
+
+```text
+Slave 被動 listen
+Master 找上門後，slave 才依 callback 決定 receive 或 transmit
+```
+
+也就是說，010 的核心不是 while loop 主動送資料，而是：
+
+```text
+EnableListen_IT
+  -> address matched interrupt
+  -> AddrCallback
+  -> Slave Receive/Transmit IT
+  -> Rx/Tx complete callback
+  -> Listen complete
+  -> loop 重新 EnableListen_IT
+```
