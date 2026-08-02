@@ -23,6 +23,12 @@
 | 006 | `006_spi_rx_arduino_interrupt_swv` | SPI RX interrupt + SWV | 在 005 的接收流程上加入 `printf()` retarget 到 SWV/ITM，收到 slave 字串後印到 ITM Data Console。 |
 | 007 | `007_i2c_master_tx_testing` | I2C1 master transmit | 按下 `PA0` 後，透過 `PB6/SCL`、`PB9/SDA` 對 7-bit slave address `0x68` 傳送字串。 |
 | 008 | `008_i2c_master_rx_testing` | I2C1 command receive | 按下 `PA0` 後，透過 `PB6/SCL`、`PB7/SDA` 先讀長度再讀 payload，練習 I2C master receive。 |
+| 009 | `009_i2c_master_rx_it` | I2C1 master receive interrupt | 以 interrupt 流程送 `0x51` 讀長度，再送 `0x52` 讀 payload。 |
+| 010 | `010_i2c_slave_tx_string` | I2C1 slave transmit string | STM32 作為 slave `0x69`，依 command 回傳字串長度與內容。 |
+| 011 | `011_i2c_slave_tx_long_string` | I2C1 slave long transmit | STM32 作為 slave `0x68`，回傳 4-byte 長度與長 payload。 |
+| 012 | `012_uart_tx` | USART2 transmit | 按下 `PA0` 後，透過 `USART2 PA2` 傳送字串。 |
+| 013 | `013_uart_tx_rx_it` | USART2 TX + RX interrupt | 傳送訊息並使用 UART RX interrupt 接收同長度回覆。 |
+| 014 | `014_ds1307_rtc_i2c` | DS1307 RTC over I2C | 使用 HAL I2C memory read/write 操作 DS1307 RTC。 |
 
 ## 資料夾結構
 

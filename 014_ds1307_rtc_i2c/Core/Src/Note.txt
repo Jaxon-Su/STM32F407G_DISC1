@@ -1,0 +1,23 @@
+STM32 HAL Example Note
+======================
+
+案例：014 DS1307 RTC I2C
+來源概念：017rtc_lcd.c
+
+核心行為
+--------
+使用 HAL I2C memory read/write 操作 DS1307，設定並每秒讀回時間日期。LCD 部分先以 Note 說明為 optional。
+
+硬體設定
+--------
+PB6/PB7 I2C1, DS1307 address 0x68
+
+搬移重點
+--------
+- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
+- 實際範例邏輯集中在 Core/Src/example_*.c。
+- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
+
+注意
+----
+I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。

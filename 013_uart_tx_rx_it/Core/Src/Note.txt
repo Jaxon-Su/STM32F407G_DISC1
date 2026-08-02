@@ -1,0 +1,23 @@
+STM32 HAL Example Note
+======================
+
+案例：013 UART TX RX Interrupt
+來源概念：016uart_case.c
+
+核心行為
+--------
+按下 PA0 後傳送三種訊息之一，並用 UART receive interrupt 等待同長度回覆。
+
+硬體設定
+--------
+USART2 PA2 TX / PA3 RX, 115200 8N1
+
+搬移重點
+--------
+- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
+- 實際範例邏輯集中在 Core/Src/example_*.c。
+- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
+
+注意
+----
+I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。

@@ -31,3 +31,9 @@ The personal learning code is primarily under each example project's custom exam
 - `008_i2c_master_rx_testing/Core/Src/Note.txt`
 
 No paid course source code, slides, or redistributed course materials are included in this repository.
+- `009_i2c_master_rx_it/Core/Src/Note.txt` and custom HAL example source
+- `010_i2c_slave_tx_string/Core/Src/Note.txt` and custom HAL example source
+- `011_i2c_slave_tx_long_string/Core/Src/Note.txt` and custom HAL example source
+- `012_uart_tx/Core/Src/Note.txt` and custom HAL example source
+- `013_uart_tx_rx_it/Core/Src/Note.txt` and custom HAL example source
+- `014_ds1307_rtc_i2c/Core/Src/Note.txt` and custom HAL example source
