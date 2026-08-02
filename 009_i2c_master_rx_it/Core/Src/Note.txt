@@ -4,20 +4,368 @@ STM32 HAL Example Note
 案例：009 I2C Master RX Interrupt
 來源概念：012i2c_master_rx_testingIT.c
 
-核心行為
---------
-I2C master 使用 interrupt 依序送 0x51、讀長度、送 0x52、讀 payload。
+目標
+----
+這個案例練習「STM32F407 作為 I2C master，用 interrupt 方式向 slave 讀資料」。
+
+流程不是一次完成，而是拆成多個非阻塞步驟：
+
+1. 按下 B1 / PA0。
+2. Master 送出 command `0x51` 給 slave `0x68`，詢問 payload 長度。
+3. TX 完成後，HAL 進 `HAL_I2C_MasterTxCpltCallback()`。
+4. 在 TX callback 裡啟動 `HAL_I2C_Master_Receive_IT()`，讀 1 byte 長度。
+5. RX 完成後，HAL 進 `HAL_I2C_MasterRxCpltCallback()`。
+6. 再送出 command `0x52`，要求 slave 準備 payload。
+7. TX 完成後，再啟動 interrupt receive，讀取 payload。
+8. payload RX 完成後，把 state 設成 `EX009_DONE`。
+9. main while loop 裡的 `Example009_I2cMasterRxIt_Loop()` 看到 DONE，點 LED 並回到 IDLE。
 
 硬體設定
 --------
-PB6/PB7 I2C1, slave 0x68
 
-搬移重點
+- `PB6`：I2C1 SCL
+- `PB7`：I2C1 SDA
+- `PA0`：B1 button，用來開始一次讀取流程
+- `PD12 / LD4`：成功讀完 payload 後 toggle
+- `PD13 / LD3`：按鈕觸發後 toggle，表示開始一次 transaction
+- `PD14 / LD5`：I2C error 時 toggle
+- Slave address：`0x68`，程式裡送給 HAL 時使用 `(0x68 << 1)`
+
+I2C 需要 pull-up。這個案例在 `HAL_I2C_MspInit()` 中把 PB6/PB7 設成：
+
+```c
+GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+GPIO_InitStruct.Pull = GPIO_PULLUP;
+GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+```
+
+也就是 alternate function + open-drain。I2C bus 的 high 不是主動推高，而是靠 pull-up 拉高；裝置只負責把線拉低。
+
+main.c 的角色
+-------------
+
+`main.c` 只負責整個程式骨架：
+
+```c
+HAL_Init();
+SystemClock_Config();
+MX_GPIO_Init();
+MX_I2C1_Init();
+Example009_I2cMasterRxIt_Init();
+
+while (1)
+{
+    Example009_I2cMasterRxIt_Loop();
+}
+```
+
+真正的案例邏輯放在：
+
+```c
+Core/Src/example_009_i2c_master_rx_it.c
+```
+
+這樣做的好處是：
+
+- CubeMX 產生的初始化留在 `main.c` / `stm32f4xx_hal_msp.c`
+- 學習案例邏輯集中在 example 檔案
+- 下一個案例可以換資料夾或換 example，不用把 main.c 改得很亂
+
+HAL / MSP / IRQ 呼叫關係
+-----------------------
+
+`MX_I2C1_Init()` 會呼叫：
+
+```c
+HAL_I2C_Init(&hi2c1);
+```
+
+HAL 初始化 I2C 時，內部會呼叫使用者提供的 MSP init：
+
+```c
+HAL_I2C_MspInit(&hi2c1);
+```
+
+本案例的 `HAL_I2C_MspInit()` 做這些事：
+
+1. 開 GPIOB clock。
+2. 設定 PB6/PB7 為 I2C1 alternate function。
+3. 開 I2C1 peripheral clock。
+4. enable `I2C1_EV_IRQn`。
+5. enable `I2C1_ER_IRQn`。
+
+所以 interrupt 能運作，關鍵不只是在呼叫 `HAL_I2C_Master_Receive_IT()`，也要有 NVIC enable。
+
+IRQ handler 在哪裡
+-----------------
+
+實際中斷入口在：
+
+```c
+Core/Src/stm32f4xx_it.c
+```
+
+本案例有兩個 I2C IRQ：
+
+```c
+void I2C1_EV_IRQHandler(void)
+{
+    HAL_I2C_EV_IRQHandler(&hi2c1);
+}
+
+void I2C1_ER_IRQHandler(void)
+{
+    HAL_I2C_ER_IRQHandler(&hi2c1);
+}
+```
+
+意思是：
+
+- `I2C1_EV_IRQHandler()` 處理 I2C event，例如 TX complete、RX complete、address、byte transfer 等事件。
+- `I2C1_ER_IRQHandler()` 處理 I2C error，例如 NACK、bus error、arbitration lost 等錯誤。
+
+你自己的程式通常不直接在 IRQ handler 裡寫大量邏輯，而是把 IRQ 交給 HAL：
+
+```c
+HAL_I2C_EV_IRQHandler(&hi2c1);
+HAL_I2C_ER_IRQHandler(&hi2c1);
+```
+
+HAL 會根據 I2C 狀態與 flag，最後呼叫對應 callback。
+
+本案例狀態機
+------------
+
+程式用 `state` 記錄目前做到哪一步：
+
+```c
+typedef enum {
+    EX009_IDLE = 0,
+    EX009_WAIT_LEN_CMD_TX,
+    EX009_WAIT_LEN_RX,
+    EX009_WAIT_PAYLOAD_CMD_TX,
+    EX009_WAIT_PAYLOAD_RX,
+    EX009_DONE,
+    EX009_ERROR
+} Example009_State;
+```
+
+可以把它想成一條流程線：
+
+```text
+IDLE
+  -> WAIT_LEN_CMD_TX
+  -> WAIT_LEN_RX
+  -> WAIT_PAYLOAD_CMD_TX
+  -> WAIT_PAYLOAD_RX
+  -> DONE
+  -> IDLE
+```
+
+如果中間任一步 HAL 回傳錯誤，或 HAL error callback 被呼叫，就進：
+
+```text
+ERROR -> IDLE
+```
+
+為什麼需要 state
+----------------
+
+Interrupt 版 I2C 是「啟動後馬上返回」，不是卡在函式裡等傳完。
+
+例如：
+
+```c
+HAL_I2C_Master_Transmit_IT(&hi2c1, addr, &command, 1);
+```
+
+這行只代表「開始送 command」。CPU 不會停在這裡等送完，而是繼續跑 main loop。
+
+等硬體真的送完，I2C event interrupt 進來，HAL 才會呼叫：
+
+```c
+HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c)
+```
+
+所以程式必須用 `state` 記住：
+
+- 這次 TX 完成，是 command `0x51` 完成？
+- 還是 command `0x52` 完成？
+- TX 完成後下一步應該讀 length？
+- 還是讀 payload？
+
+沒有 state，callback 裡就不知道下一步要做什麼。
+
+案例實際流程對照
+----------------
+
+1. `Example009_I2cMasterRxIt_Loop()`
+
+等待按鈕：
+
+```c
+if (state == EX009_IDLE && WaitButtonPress())
+{
+    HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+    StartReadSequence();
+}
+```
+
+2. `StartReadSequence()`
+
+送出 `0x51`：
+
+```c
+command = CMD_READ_LENGTH;
+state = EX009_WAIT_LEN_CMD_TX;
+HAL_I2C_Master_Transmit_IT(&hi2c1, (SLAVE_ADDR_7BIT << 1), &command, 1);
+```
+
+3. `HAL_I2C_MasterTxCpltCallback()`
+
+如果剛剛送完的是 `0x51`，下一步讀長度：
+
+```c
+state = EX009_WAIT_LEN_RX;
+HAL_I2C_Master_Receive_IT(&hi2c1, (SLAVE_ADDR_7BIT << 1), &rx_len, 1);
+```
+
+如果剛剛送完的是 `0x52`，下一步讀 payload：
+
+```c
+state = EX009_WAIT_PAYLOAD_RX;
+HAL_I2C_Master_Receive_IT(&hi2c1, (SLAVE_ADDR_7BIT << 1), rx_buf, rx_len);
+```
+
+4. `HAL_I2C_MasterRxCpltCallback()`
+
+如果剛讀完 length，接著送 `0x52`：
+
+```c
+if (rx_len > RX_BUFFER_SIZE) rx_len = RX_BUFFER_SIZE;
+command = CMD_READ_PAYLOAD;
+state = EX009_WAIT_PAYLOAD_CMD_TX;
+HAL_I2C_Master_Transmit_IT(&hi2c1, (SLAVE_ADDR_7BIT << 1), &command, 1);
+```
+
+如果剛讀完 payload，整個流程完成：
+
+```c
+state = EX009_DONE;
+```
+
+5. 回到 `Example009_I2cMasterRxIt_Loop()`
+
+main loop 看到 DONE：
+
+```c
+rx_buf[rx_len] = '\0';
+ShowResult(HAL_OK);
+state = EX009_IDLE;
+```
+
+為什麼 callback 裡不直接處理全部事情
+------------------------------------
+
+callback 是在 interrupt 流程中被呼叫，應該保持短、快、明確。
+
+本案例 callback 只做：
+
+- 判斷目前 state
+- 啟動下一個 I2C IT 動作
+- 或把 state 設成 DONE / ERROR
+
+比較耗時或比較高層的事情，例如顯示結果、LED 狀態、回到 IDLE，留給 `Example009_I2cMasterRxIt_Loop()` 處理。
+
+`HAL_I2C_Master_Receive_IT()` 和 polling 差異
+--------------------------------------------
+
+Polling 版常見寫法：
+
+```c
+HAL_I2C_Master_Receive(&hi2c1, addr, buffer, len, HAL_MAX_DELAY);
+```
+
+CPU 會等到接收完成或 timeout。
+
+Interrupt 版：
+
+```c
+HAL_I2C_Master_Receive_IT(&hi2c1, addr, buffer, len);
+```
+
+函式只啟動接收，完成後靠 interrupt + callback 通知你。
+
+所以 interrupt 版程式通常需要：
+
+- buffer 要是全域或 static，不能是很快消失的 local stack buffer
+- 需要 state machine
+- 需要 callback
+- 需要 NVIC IRQ enable
+
+本案例為什麼 `(0x68 << 1)`
+--------------------------
+
+`SLAVE_ADDR_7BIT` 是 7-bit address：
+
+```c
+#define SLAVE_ADDR_7BIT (0x68U)
+```
+
+STM32 HAL I2C API 的 address 參數通常放在 bit[7:1]，最低 bit 保留給 R/W 位元，所以傳入時用：
+
+```c
+(SLAVE_ADDR_7BIT << 1)
+```
+
+也就是：
+
+```text
+0x68 -> 0xD0
+```
+
+HAL 會依照 transmit / receive 自己處理 R/W bit。
+
+錯誤處理
 --------
-- Driver-layer 的 GPIO alternate function / peripheral clock / IRQ enable，在 HAL 專案裡拆到 MX_*_Init() 和 HAL_*_MspInit()。
-- 實際範例邏輯集中在 Core/Src/example_*.c。
-- main.c 只負責 HAL、clock、GPIO、外設初始化，然後呼叫 example init/loop。
 
-注意
-----
-I2C 案例需要外部 slave/master 實際配合。UART 案例需要 USB-UART 或另一塊板子/Arduino 回應。DS1307 案例需要 DS1307 模組與 3.3V-safe I2C pull-up。
+如果 HAL 偵測到 I2C error，會進：
+
+```c
+HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+```
+
+本案例做法：
+
+```c
+if (hi2c->Instance == I2C1)
+{
+    state = EX009_ERROR;
+}
+```
+
+之後 main loop 看到 `EX009_ERROR`，呼叫：
+
+```c
+ShowResult(HAL_ERROR);
+```
+
+最後 LD5 toggle 表示錯誤。
+
+學習重點
+--------
+
+這個案例的核心不是「收到字串」而已，而是理解 interrupt 版 HAL I2C 的節奏：
+
+```text
+啟動 IT API
+  -> 函式立即返回
+  -> 硬體慢慢傳輸
+  -> I2C IRQ 觸發
+  -> HAL IRQ handler 清/判斷 flag
+  -> HAL 呼叫 user callback
+  -> callback 啟動下一步或更新 state
+  -> main loop 根據 state 做高層處理
+```
+
+這就是 HAL interrupt peripheral programming 的基本型態。SPI IT、UART IT、I2C IT 都會長得很像。
